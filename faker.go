@@ -364,19 +364,18 @@ func FakeData(a interface{}) error {
 	return nil
 }
 
-func fakeSkipFields(data interface{}, skipFields []string) error {
-
-	reflectType := reflect.TypeOf(data)
+func FakeDataSkipFields(a interface{}, fieldsToSkip []string) error {
+	reflectType := reflect.TypeOf(a)
 
 	if reflectType.Kind() != reflect.Ptr {
 		return errors.New(ErrValueNotPtr)
 	}
 
 	skipMap := make(map[string]struct{})
-	for _, s := range skipFields {
+	for _, s := range fieldsToSkip {
 		skipMap[s] = struct{}{}
 	}
-	v := reflect.ValueOf(data)
+	v := reflect.ValueOf(a)
 	ind := reflect.Indirect(v)
 	s := ind.Type()
 
