@@ -342,6 +342,29 @@ func SetRandomNumberBoundaries(start, end int) error {
 // FakeData is the main function. Will generate a fake data based on your struct.  You can use this for automation testing, or anything that need automated data.
 // You don't need to Create your own data for your testing.
 func FakeData(a interface{}) error {
+	return FakeDataNullableFields(a, -1)
+}
+
+func FakeDataNullablePermutations(a interface{}) (interface{}, error) {
+	totalPermutations, err := CountNullableFields(a)
+	if err != nil {
+		return nil, fmt.Errorf("CountNullableFeilds return error %w", err)
+	}
+	t := reflect.TypeOf(a)
+	v := reflect.MakeSlice(reflect.SliceOf(t), totalPermutations, totalPermutations)
+
+	for i := 0; i < totalPermutations; i++ {
+		// e := reflect.New(t)
+		err := FakeDataNullableFields(v.Index(i).Addr().Interface(), i)
+		if err != nil {
+			return nil, fmt.Errorf("FakeDataNullableFields return error %w", err)
+		}
+		// v.Index(i).Set(e.Interface())
+	}
+	return v.Interface(), nil
+}
+
+func FakeDataNullableFields(a interface{}, count int) error {
 
 	reflectType := reflect.TypeOf(a)
 
@@ -355,7 +378,7 @@ func FakeData(a interface{}) error {
 
 	rval := reflect.ValueOf(a)
 
-	finalValue, err := getValue(a)
+	finalValue, _, err := getValue(a, count)
 	if err != nil {
 		return err
 	}
@@ -455,41 +478,41 @@ func RemoveProvider(tag string) error {
 	return nil
 }
 
-func getValue(a interface{}) (reflect.Value, error) {
+func CountNullableFields(a interface{}) (int, error) {
+	return countNullableFields(a, 0)
+}
+
+func countNullableFields(a interface{}, count int) (int, error) {
+	newCount := count
 	t := reflect.TypeOf(a)
 	if t == nil {
 		if ignoreInterface {
-			return reflect.New(reflect.TypeOf(reflect.Struct)), nil
+			return newCount, nil
 		}
-		return reflect.Value{}, fmt.Errorf("interface{} not allowed")
+		return newCount, fmt.Errorf("interface{} not allowed")
 	}
 	k := t.Kind()
-
 	switch k {
 	case reflect.Ptr:
 		v := reflect.New(t.Elem())
-		var val reflect.Value
 		var err error
 		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
-			val, err = getValue(reflect.ValueOf(a).Elem().Interface())
+			newCount, err = countNullableFields(reflect.ValueOf(a).Elem().Interface(), count)
 			if err != nil {
-				return reflect.Value{}, err
+				return newCount, err
 			}
 		} else {
-			val, err = getValue(v.Elem().Interface())
+			newCount, err = countNullableFields(v.Elem().Interface(), count)
 			if err != nil {
-				return reflect.Value{}, err
+				return newCount, err
 			}
 		}
-		v.Elem().Set(val.Convert(t.Elem()))
-		return v, nil
+		return newCount, nil
 	case reflect.Struct:
 		switch t.String() {
 		case "time.Time":
-			ft := time.Now().Add(time.Duration(rand.Int63()))
-			return reflect.ValueOf(ft), nil
+			return newCount, nil
 		default:
-			originalDataVal := reflect.ValueOf(a)
 			v := reflect.New(t).Elem()
 			retry := 0 // error if cannot generate unique value after maxRetry tries
 			for i := 0; i < v.NumField(); i++ {
@@ -501,39 +524,41 @@ func getValue(a interface{}) (reflect.Value, error) {
 				case tags.keepOriginal:
 					zero, err := isZero(reflect.ValueOf(a).Field(i))
 					if err != nil {
-						return reflect.Value{}, err
+						return newCount, err
 					}
 					if zero {
 						err := setDataWithTag(v.Field(i).Addr(), tags.fieldType)
 						if err != nil {
-							return reflect.Value{}, err
+							return newCount, err
 						}
 						continue
 					}
-					v.Field(i).Set(reflect.ValueOf(a).Field(i))
 				case tags.fieldType == "":
-					val, err := getValue(v.Field(i).Interface())
+					k := v.Field(i).Kind()
+					var err error
+					if k == reflect.Ptr || k == reflect.Slice || k == reflect.Map {
+						newCount += 1
+					}
+					newCount, err = countNullableFields(v.Field(i).Interface(), newCount)
 					if err != nil {
-						return reflect.Value{}, err
+						return newCount, err
 					}
-					val = val.Convert(v.Field(i).Type())
-					v.Field(i).Set(val)
 				case tags.fieldType == SKIP:
-					item := originalDataVal.Field(i).Interface()
-					if v.CanSet() && item != nil {
-						v.Field(i).Set(reflect.ValueOf(item))
-					}
+					// item := originalDataVal.Field(i).Interface()
+					// if v.CanSet() && item != nil {
+					// 	v.Field(i).Set(reflect.ValueOf(item))
+					// }
 				default:
 					err := setDataWithTag(v.Field(i).Addr(), tags.fieldType)
 					if err != nil {
-						return reflect.Value{}, err
+						return newCount, err
 					}
 				}
 
 				if tags.unique {
 
 					if retry >= maxRetry {
-						return reflect.Value{}, fmt.Errorf(ErrUniqueFailure, reflect.TypeOf(a).Field(i).Name)
+						return newCount, fmt.Errorf(ErrUniqueFailure, reflect.TypeOf(a).Field(i).Name)
 					}
 
 					value := v.Field(i).Interface()
@@ -549,95 +574,270 @@ func getValue(a interface{}) (reflect.Value, error) {
 				}
 
 			}
-			return v, nil
+			return newCount, nil
+		}
+	case reflect.Slice:
+		len := randomSliceAndMapSize()
+		if shouldSetNil && len == 0 {
+			return newCount, nil
+		}
+		v := reflect.MakeSlice(t, len, len)
+		for i := 0; i < v.Len(); i++ {
+			c, err := countNullableFields(v.Index(i).Interface(), newCount)
+			if err != nil {
+				return c, err
+			}
+			newCount = c
+		}
+		return newCount, nil
+	case reflect.Array:
+		v := reflect.New(t).Elem()
+		for i := 0; i < v.Len(); i++ {
+			c, err := countNullableFields(v.Index(i).Interface(), newCount)
+			if err != nil {
+				return c, err
+			}
+			newCount = c
+		}
+		return newCount, nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Float32, reflect.Float64, reflect.Bool, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.String:
+		return newCount, nil
+	case reflect.Map:
+		len := randomSliceAndMapSize()
+		if shouldSetNil && len == 0 {
+			return newCount, nil
+		}
+		for i := 0; i < len; i++ {
+			keyInstance := reflect.New(t.Key()).Elem().Interface()
+			c, err := countNullableFields(keyInstance, newCount)
+			if err != nil {
+				return c, err
+			}
+			newCount = c
+
+			valueInstance := reflect.New(t.Elem()).Elem().Interface()
+			c, err = countNullableFields(valueInstance, newCount)
+			if err != nil {
+				return c, err
+			}
+			newCount = c
+		}
+		return newCount, nil
+	default:
+		err := fmt.Errorf("no support for kind %+v", t)
+		return newCount, err
+	}
+}
+
+// getValue fakes the interface recursively.
+// count will be used to set nil values where possible if count is 0
+// and will be decremented everything time it is not set recursively
+func getValue(a interface{}, count int) (reflect.Value, int, error) {
+	t := reflect.TypeOf(a)
+	newCount := count
+	if t == nil {
+		if ignoreInterface {
+			return reflect.New(reflect.TypeOf(reflect.Struct)), newCount, nil
+		}
+		return reflect.Value{}, newCount, fmt.Errorf("interface{} not allowed")
+	}
+	k := t.Kind()
+
+	switch k {
+	case reflect.Ptr:
+		v := reflect.New(t.Elem())
+		var val reflect.Value
+		var err error
+		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
+			val, newCount, err = getValue(reflect.ValueOf(a).Elem().Interface(), newCount)
+			if err != nil {
+				return reflect.Value{}, newCount, err
+			}
+		} else {
+			val, newCount, err = getValue(v.Elem().Interface(), newCount)
+			if err != nil {
+				return reflect.Value{}, newCount, err
+			}
+		}
+		v.Elem().Set(val.Convert(t.Elem()))
+		return v, newCount, nil
+	case reflect.Struct:
+		switch t.String() {
+		case "time.Time":
+			ft := time.Now().Add(time.Duration(rand.Int63()))
+			return reflect.ValueOf(ft), newCount, nil
+		default:
+			originalDataVal := reflect.ValueOf(a)
+			v := reflect.New(t).Elem()
+			retry := 0 // error if cannot generate unique value after maxRetry tries
+			for i := 0; i < v.NumField(); i++ {
+				if !v.Field(i).CanSet() {
+					continue // to avoid panic to set on unexported field in struct
+				}
+				tags := decodeTags(t, i)
+				switch {
+				case tags.keepOriginal:
+					zero, err := isZero(reflect.ValueOf(a).Field(i))
+					if err != nil {
+						return reflect.Value{}, newCount, err
+					}
+					if zero {
+						err := setDataWithTag(v.Field(i).Addr(), tags.fieldType)
+						if err != nil {
+							return reflect.Value{}, newCount, err
+						}
+						continue
+					}
+					v.Field(i).Set(reflect.ValueOf(a).Field(i))
+				case tags.fieldType == "":
+					k := v.Field(i).Kind()
+					if k == reflect.Ptr || k == reflect.Slice || k == reflect.Map {
+						if newCount != 0 {
+							val, c, err := getValue(v.Field(i).Interface(), newCount-1)
+							if err != nil {
+								return reflect.Value{}, c, err
+							}
+							newCount = c
+							val = val.Convert(v.Field(i).Type())
+							v.Field(i).Set(val)
+						} else {
+							// decrease so we want null all next nullable fields
+							newCount -= 1
+						}
+					} else {
+						val, c, err := getValue(v.Field(i).Interface(), newCount)
+						if err != nil {
+							return reflect.Value{}, c, err
+						}
+						newCount = c
+						val = val.Convert(v.Field(i).Type())
+						v.Field(i).Set(val)
+					}
+
+				case tags.fieldType == SKIP:
+					item := originalDataVal.Field(i).Interface()
+					if v.CanSet() && item != nil {
+						v.Field(i).Set(reflect.ValueOf(item))
+					}
+				default:
+					err := setDataWithTag(v.Field(i).Addr(), tags.fieldType)
+					if err != nil {
+						return reflect.Value{}, newCount, err
+					}
+				}
+
+				if tags.unique {
+
+					if retry >= maxRetry {
+						return reflect.Value{}, count, fmt.Errorf(ErrUniqueFailure, reflect.TypeOf(a).Field(i).Name)
+					}
+
+					value := v.Field(i).Interface()
+					if slice.ContainsValue(uniqueValues[tags.fieldType], value) { // Retry if unique value already found
+						i--
+						retry++
+						continue
+					}
+					retry = 0
+					uniqueValues[tags.fieldType] = append(uniqueValues[tags.fieldType], value)
+				} else {
+					retry = 0
+				}
+
+			}
+			return v, newCount, nil
 		}
 
 	case reflect.String:
 		res, err := randomString(randomStringLen, &lang)
-		return reflect.ValueOf(res), err
+		return reflect.ValueOf(res), newCount, err
 	case reflect.Slice:
 		len := randomSliceAndMapSize()
 		if shouldSetNil && len == 0 {
-			return reflect.Zero(t), nil
+			return reflect.Zero(t), newCount, nil
 		}
 		v := reflect.MakeSlice(t, len, len)
 		for i := 0; i < v.Len(); i++ {
-			val, err := getValue(v.Index(i).Interface())
+			val, c, err := getValue(v.Index(i).Interface(), newCount)
 			if err != nil {
-				return reflect.Value{}, err
+				return reflect.Value{}, c, err
 			}
+			newCount = c
 			val = val.Convert(v.Index(i).Type())
 			v.Index(i).Set(val)
 		}
-		return v, nil
+		return v, newCount, nil
 	case reflect.Array:
 		v := reflect.New(t).Elem()
 		for i := 0; i < v.Len(); i++ {
-			val, err := getValue(v.Index(i).Interface())
+			val, c, err := getValue(v.Index(i).Interface(), newCount)
 			if err != nil {
-				return reflect.Value{}, err
+				return reflect.Value{}, c, err
 			}
+			newCount = c
 			val = val.Convert(v.Index(i).Type())
 			v.Index(i).Set(val)
 		}
-		return v, nil
+		return v, newCount, nil
 	case reflect.Int:
-		return reflect.ValueOf(randomInteger()), nil
+		return reflect.ValueOf(randomInteger()), newCount, nil
 	case reflect.Int8:
-		return reflect.ValueOf(int8(randomInteger())), nil
+		return reflect.ValueOf(int8(randomInteger())), newCount, nil
 	case reflect.Int16:
-		return reflect.ValueOf(int16(randomInteger())), nil
+		return reflect.ValueOf(int16(randomInteger())), newCount, nil
 	case reflect.Int32:
-		return reflect.ValueOf(int32(randomInteger())), nil
+		return reflect.ValueOf(int32(randomInteger())), newCount, nil
 	case reflect.Int64:
-		return reflect.ValueOf(int64(randomInteger())), nil
+		return reflect.ValueOf(int64(randomInteger())), newCount, nil
 	case reflect.Float32:
-		return reflect.ValueOf(rand.Float32()), nil
+		return reflect.ValueOf(rand.Float32()), newCount, nil
 	case reflect.Float64:
-		return reflect.ValueOf(rand.Float64()), nil
+		return reflect.ValueOf(rand.Float64()), newCount, nil
 	case reflect.Bool:
 		val := rand.Intn(2) > 0
-		return reflect.ValueOf(val), nil
+		return reflect.ValueOf(val), newCount, nil
 
 	case reflect.Uint:
-		return reflect.ValueOf(uint(randomInteger())), nil
+		return reflect.ValueOf(uint(randomInteger())), newCount, nil
 
 	case reflect.Uint8:
-		return reflect.ValueOf(uint8(randomInteger())), nil
+		return reflect.ValueOf(uint8(randomInteger())), newCount, nil
 
 	case reflect.Uint16:
-		return reflect.ValueOf(uint16(randomInteger())), nil
+		return reflect.ValueOf(uint16(randomInteger())), newCount, nil
 
 	case reflect.Uint32:
-		return reflect.ValueOf(uint32(randomInteger())), nil
+		return reflect.ValueOf(uint32(randomInteger())), newCount, nil
 
 	case reflect.Uint64:
-		return reflect.ValueOf(uint64(randomInteger())), nil
+		return reflect.ValueOf(uint64(randomInteger())), newCount, nil
 
 	case reflect.Map:
 		len := randomSliceAndMapSize()
 		if shouldSetNil && len == 0 {
-			return reflect.Zero(t), nil
+			return reflect.Zero(t), newCount, nil
 		}
 		v := reflect.MakeMap(t)
 		for i := 0; i < len; i++ {
 			keyInstance := reflect.New(t.Key()).Elem().Interface()
-			key, err := getValue(keyInstance)
+			key, c, err := getValue(keyInstance, newCount)
 			if err != nil {
-				return reflect.Value{}, err
+				return reflect.Value{}, c, err
 			}
+			newCount = c
 
 			valueInstance := reflect.New(t.Elem()).Elem().Interface()
-			val, err := getValue(valueInstance)
+			val, c, err := getValue(valueInstance, newCount)
 			if err != nil {
-				return reflect.Value{}, err
+				return reflect.Value{}, c, err
 			}
+			newCount = c
 			v.SetMapIndex(key, val)
 		}
-		return v, nil
+		return v, newCount, nil
 	default:
 		err := fmt.Errorf("no support for kind %+v", t)
-		return reflect.Value{}, err
+		return reflect.Value{}, count, err
 	}
 
 }

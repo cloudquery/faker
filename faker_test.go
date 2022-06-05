@@ -930,6 +930,7 @@ func TestPointerToCustomScalar(t *testing.T) {
 
 type PointerCustomIntStruct struct {
 	V *CustomInt
+	A []int
 }
 
 func TestPointerToCustomIntStruct(t *testing.T) {
@@ -941,6 +942,43 @@ func TestPointerToCustomIntStruct(t *testing.T) {
 		t.Error("Expected Not Error, But Got: ", err)
 	}
 	fmt.Printf(" A value: %+v , PointerCustomIntStruct scalar Value: %+v  ", a, a)
+}
+
+type NilNestedStruct struct {
+	A *int
+}
+
+type NilStructTest struct {
+	V *CustomInt
+	A []int
+	T map[string]string
+	B map[string]NilNestedStruct
+}
+
+func TestCountNullableFields(t *testing.T) {
+	a := NilStructTest{}
+
+	if err := SetRandomMapAndSliceMinSize(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetRandomMapAndSliceMaxSize(1); err != nil {
+		t.Fatal(err)
+	}
+	c, err := CountNullableFields(a)
+	fmt.Println(c)
+	fmt.Println(err)
+
+	err = FakeDataNullableFields(&a, 1)
+	fmt.Println(err)
+	fmt.Println(a)
+
+	permutations, err := FakeDataNullablePermutations(a)
+	fmt.Println(err)
+	p := permutations.([]NilStructTest)
+	fmt.Println(permutations)
+	fmt.Println(p)
+	// a.A = nil
+	// fmt.Println(a.A)
 }
 
 func TestSkipField(t *testing.T) {
