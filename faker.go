@@ -387,7 +387,7 @@ func FakeDataSkipFields(a interface{}, fieldsToSkip []string) error {
 		if _, ok := skipMap[s.Field(i).Name]; ok {
 			continue
 		}
-		ifc := ind.Field(i).Interface()
+		ifc := field.Interface()
 		if err := FakeData(&ifc); err != nil {
 			return err
 		}
