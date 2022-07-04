@@ -391,7 +391,7 @@ func FakeDataSkipFields(a interface{}, fieldsToSkip []string) error {
 		if err := FakeData(&ifc); err != nil {
 			return err
 		}
-		ind.Field(i).Set(reflect.ValueOf(ifc))
+		field.Set(reflect.ValueOf(ifc))
 	}
 	return nil
 }
