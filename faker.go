@@ -355,7 +355,7 @@ func FakeData(a interface{}) error {
 
 	rval := reflect.ValueOf(a)
 
-	finalValue, err := getValue(a)
+	finalValue, err := getValue(a, 0, -1)
 	if err != nil {
 		return err
 	}
@@ -393,6 +393,30 @@ func FakeDataSkipFields(a interface{}, fieldsToSkip []string) error {
 		}
 		field.Set(reflect.ValueOf(ifc))
 	}
+	return nil
+}
+
+// FakeDataWithNilPointers leaves pointers as nil values at the given depth, with depth 0 being the root.
+func FakeDataWithNilPointers(a interface{}, depth int) error {
+
+	reflectType := reflect.TypeOf(a)
+
+	if reflectType.Kind() != reflect.Ptr {
+		return errors.New(ErrValueNotPtr)
+	}
+
+	if reflect.ValueOf(a).IsNil() {
+		return fmt.Errorf(ErrNotSupportedPointer, reflectType.Elem().String())
+	}
+
+	rval := reflect.ValueOf(a)
+
+	finalValue, err := getValue(a, 0, depth)
+	if err != nil {
+		return err
+	}
+
+	rval.Elem().Set(finalValue.Elem().Convert(reflectType.Elem()))
 	return nil
 }
 
@@ -460,7 +484,7 @@ func RemoveProvider(tag string) error {
 	return nil
 }
 
-func getValue(a interface{}) (reflect.Value, error) {
+func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Value, error) {
 	t := reflect.TypeOf(a)
 	if t == nil {
 		if ignoreInterface {
@@ -472,16 +496,24 @@ func getValue(a interface{}) (reflect.Value, error) {
 
 	switch k {
 	case reflect.Ptr:
+		// Set pointer to nil at this depth, if requested
+		if currentDepth == useNilPointerDepth {
+			v := reflect.New(t.Elem())
+			p := v.Elem()
+			p.Set(reflect.Zero(p.Type()))
+			return v, nil
+		}
+
 		v := reflect.New(t.Elem())
 		var val reflect.Value
 		var err error
 		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
-			val, err = getValue(reflect.ValueOf(a).Elem().Interface())
+			val, err = getValue(reflect.ValueOf(a).Elem().Interface(), currentDepth+1, useNilPointerDepth)
 			if err != nil {
 				return reflect.Value{}, err
 			}
 		} else {
-			val, err = getValue(v.Elem().Interface())
+			val, err = getValue(v.Elem().Interface(), currentDepth+1, useNilPointerDepth)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -517,7 +549,7 @@ func getValue(a interface{}) (reflect.Value, error) {
 					}
 					v.Field(i).Set(reflect.ValueOf(a).Field(i))
 				case tags.fieldType == "":
-					val, err := getValue(v.Field(i).Interface())
+					val, err := getValue(v.Field(i).Interface(), currentDepth+1, useNilPointerDepth)
 					if err != nil {
 						return reflect.Value{}, err
 					}
@@ -567,7 +599,7 @@ func getValue(a interface{}) (reflect.Value, error) {
 		}
 		v := reflect.MakeSlice(t, len, len)
 		for i := 0; i < v.Len(); i++ {
-			val, err := getValue(v.Index(i).Interface())
+			val, err := getValue(v.Index(i).Interface(), currentDepth+1, useNilPointerDepth)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -578,7 +610,7 @@ func getValue(a interface{}) (reflect.Value, error) {
 	case reflect.Array:
 		v := reflect.New(t).Elem()
 		for i := 0; i < v.Len(); i++ {
-			val, err := getValue(v.Index(i).Interface())
+			val, err := getValue(v.Index(i).Interface(), currentDepth+1, useNilPointerDepth)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -627,13 +659,13 @@ func getValue(a interface{}) (reflect.Value, error) {
 		v := reflect.MakeMap(t)
 		for i := 0; i < len; i++ {
 			keyInstance := reflect.New(t.Key()).Elem().Interface()
-			key, err := getValue(keyInstance)
+			key, err := getValue(keyInstance, currentDepth+1, useNilPointerDepth)
 			if err != nil {
 				return reflect.Value{}, err
 			}
 
 			valueInstance := reflect.New(t.Elem()).Elem().Interface()
-			val, err := getValue(valueInstance)
+			val, err := getValue(valueInstance, currentDepth+1, useNilPointerDepth)
 			if err != nil {
 				return reflect.Value{}, err
 			}
