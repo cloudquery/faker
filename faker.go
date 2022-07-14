@@ -440,8 +440,8 @@ func (g *generator) Next(a interface{}) (done bool, err error) {
 }
 
 // FakeDataWithNilPointerGenerator returns a generator that can be used to create successive fakes with
-// a single nullable field set to nil. This can be used to iterate through fakes with all possible nullable fields
-// set to nil to catch nil pointer-dereference errors.
+// a single pointer set to nil. This can be used to iterate through fakes with all possible pointer fields
+// set to nil, to catch nil pointer-dereference errors.
 func FakeDataWithNilPointerGenerator() *generator {
 	return &generator{
 		index: 0,
@@ -512,8 +512,8 @@ func RemoveProvider(tag string) error {
 	return nil
 }
 
-// seenNullableFields is used to keep track of the number of nullable fields that have been encountered
-// while recursing. A field will be set to nil if seenPointers matches nilIndex. If nilIndex is -1,
+// seenPointers is used to keep track of the number of pointers that have been encountered
+// while recursing. A pointer will be set to nil if seenPointers matches nilIndex. If nilIndex is -1,
 // no pointers will be set to nil.
 func getValue(a interface{}, seenPointers *int, nilIndex int) (reflect.Value, error) {
 	t := reflect.TypeOf(a)
