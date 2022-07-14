@@ -397,11 +397,16 @@ func FakeDataSkipFields(a interface{}, fieldsToSkip []string) error {
 	return nil
 }
 
-type generator struct {
+// Generator exposes a function to get the next faked instance in a collection
+type Generator interface {
+	Next(a interface{}) (done bool, err error)
+}
+
+type nilPointerGenerator struct {
 	index int
 }
 
-func (g *generator) Next(a interface{}) (done bool, err error) {
+func (g *nilPointerGenerator) Next(a interface{}) (done bool, err error) {
 	reflectType := reflect.TypeOf(a)
 
 	if reflectType.Kind() != reflect.Ptr {
@@ -442,8 +447,8 @@ func (g *generator) Next(a interface{}) (done bool, err error) {
 // FakeDataWithNilPointerGenerator returns a generator that can be used to create successive fakes with
 // a single pointer set to nil. This can be used to iterate through fakes with all possible pointer fields
 // set to nil, to catch nil pointer-dereference errors.
-func FakeDataWithNilPointerGenerator() *generator {
-	return &generator{
+func FakeDataWithNilPointerGenerator() Generator {
+	return &nilPointerGenerator{
 		index: 0,
 	}
 }
