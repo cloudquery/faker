@@ -355,7 +355,8 @@ func FakeData(a interface{}) error {
 
 	rval := reflect.ValueOf(a)
 
-	finalValue, err := getValue(a, 0, -1)
+	seenNullableFields := 0
+	finalValue, err := getValue(a, &seenNullableFields, -1)
 	if err != nil {
 		return err
 	}
@@ -396,28 +397,55 @@ func FakeDataSkipFields(a interface{}, fieldsToSkip []string) error {
 	return nil
 }
 
-// FakeDataWithNilPointers leaves pointers as nil values at the given depth, with depth 0 being the root.
-func FakeDataWithNilPointers(a interface{}, depth int) error {
+type generator struct {
+	index int
+}
 
+func (g *generator) Next(a interface{}) (done bool, err error) {
 	reflectType := reflect.TypeOf(a)
 
 	if reflectType.Kind() != reflect.Ptr {
-		return errors.New(ErrValueNotPtr)
+		return false, errors.New(ErrValueNotPtr)
 	}
 
 	if reflect.ValueOf(a).IsNil() {
-		return fmt.Errorf(ErrNotSupportedPointer, reflectType.Elem().String())
+		return false, fmt.Errorf(ErrNotSupportedPointer, reflectType.Elem().String())
 	}
 
 	rval := reflect.ValueOf(a)
 
-	finalValue, err := getValue(a, 0, depth)
-	if err != nil {
-		return err
+	// if a is a pointer, set seenPointers to -1 so that the root itself is not set to nil
+	t := reflect.TypeOf(a)
+	seenPointers := 0
+	if t != nil {
+		k := t.Kind()
+		switch k {
+		case reflect.Ptr:
+			seenPointers = -1
+		}
 	}
 
-	rval.Elem().Set(finalValue.Elem().Convert(reflectType.Elem()))
-	return nil
+	finalValue, err := getValue(a, &seenPointers, g.index)
+	if err != nil {
+		return false, err
+	}
+	g.index++
+
+	// we are done when we have exhausted all pointers
+	done = g.index >= seenPointers
+	if !finalValue.IsNil() {
+		rval.Elem().Set(finalValue.Elem().Convert(reflectType.Elem()))
+	}
+	return done, nil
+}
+
+// FakeDataWithNilPointerGenerator returns a generator that can be used to create successive fakes with
+// a single nullable field set to nil. This can be used to iterate through fakes with all possible nullable fields
+// set to nil to catch nil pointer-dereference errors.
+func FakeDataWithNilPointerGenerator() *generator {
+	return &generator{
+		index: 0,
+	}
 }
 
 // AddProvider extend faker with tag to generate fake data with specified custom algorithm
@@ -484,7 +512,10 @@ func RemoveProvider(tag string) error {
 	return nil
 }
 
-func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Value, error) {
+// seenNullableFields is used to keep track of the number of nullable fields that have been encountered
+// while recursing. A field will be set to nil if seenPointers matches nilIndex. If nilIndex is -1,
+// no pointers will be set to nil.
+func getValue(a interface{}, seenPointers *int, nilIndex int) (reflect.Value, error) {
 	t := reflect.TypeOf(a)
 	if t == nil {
 		if ignoreInterface {
@@ -496,29 +527,28 @@ func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Valu
 
 	switch k {
 	case reflect.Ptr:
-		// Set pointer to nil at this depth, if requested
-		if currentDepth == useNilPointerDepth {
-			v := reflect.New(t.Elem())
-			p := v.Elem()
-			p.Set(reflect.Zero(p.Type()))
-			return v, nil
-		}
-
+		seen := *seenPointers
+		(*seenPointers)++
 		v := reflect.New(t.Elem())
 		var val reflect.Value
 		var err error
 		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
-			val, err = getValue(reflect.ValueOf(a).Elem().Interface(), currentDepth+1, useNilPointerDepth)
+			val, err = getValue(reflect.ValueOf(a).Elem().Interface(), seenPointers, nilIndex)
 			if err != nil {
 				return reflect.Value{}, err
 			}
 		} else {
-			val, err = getValue(v.Elem().Interface(), currentDepth+1, useNilPointerDepth)
+			val, err = getValue(v.Elem().Interface(), seenPointers, nilIndex)
 			if err != nil {
 				return reflect.Value{}, err
 			}
 		}
-		v.Elem().Set(val.Convert(t.Elem()))
+		// Set pointer to nil at this index, if requested
+		if seen == nilIndex {
+			v = reflect.Zero(t)
+		} else {
+			v.Elem().Set(val.Convert(t.Elem()))
+		}
 		return v, nil
 	case reflect.Struct:
 		switch t.String() {
@@ -549,7 +579,7 @@ func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Valu
 					}
 					v.Field(i).Set(reflect.ValueOf(a).Field(i))
 				case tags.fieldType == "":
-					val, err := getValue(v.Field(i).Interface(), currentDepth+1, useNilPointerDepth)
+					val, err := getValue(v.Field(i).Interface(), seenPointers, nilIndex)
 					if err != nil {
 						return reflect.Value{}, err
 					}
@@ -599,7 +629,7 @@ func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Valu
 		}
 		v := reflect.MakeSlice(t, len, len)
 		for i := 0; i < v.Len(); i++ {
-			val, err := getValue(v.Index(i).Interface(), currentDepth+1, useNilPointerDepth)
+			val, err := getValue(v.Index(i).Interface(), seenPointers, nilIndex)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -610,7 +640,7 @@ func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Valu
 	case reflect.Array:
 		v := reflect.New(t).Elem()
 		for i := 0; i < v.Len(); i++ {
-			val, err := getValue(v.Index(i).Interface(), currentDepth+1, useNilPointerDepth)
+			val, err := getValue(v.Index(i).Interface(), seenPointers, nilIndex)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -659,13 +689,13 @@ func getValue(a interface{}, currentDepth, useNilPointerDepth int) (reflect.Valu
 		v := reflect.MakeMap(t)
 		for i := 0; i < len; i++ {
 			keyInstance := reflect.New(t.Key()).Elem().Interface()
-			key, err := getValue(keyInstance, currentDepth+1, useNilPointerDepth)
+			key, err := getValue(keyInstance, seenPointers, nilIndex)
 			if err != nil {
 				return reflect.Value{}, err
 			}
 
 			valueInstance := reflect.New(t.Elem()).Elem().Interface()
-			val, err := getValue(valueInstance, currentDepth+1, useNilPointerDepth)
+			val, err := getValue(valueInstance, seenPointers, nilIndex)
 			if err != nil {
 				return reflect.Value{}, err
 			}
